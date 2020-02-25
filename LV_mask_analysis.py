@@ -36,8 +36,10 @@ class Contour:
         self.segmentations_path = segmentations_path
         if output_path is not None:
             self.output_path = check_directory(output_path)
-        else:
+        elif segmentations_path is not None:
             self.output_path = check_directory(os.path.join(segmentations_path, 'output'))
+        else:
+            self.output_path = check_directory(os.path.join(os.getcwd(), 'output'))
 
         if pixel_size is not None:
             self.pixel_size = pixel_size  # either provided explicitly
@@ -309,8 +311,8 @@ class Contour:
         curvature_markers = {}
         for key, value in curvature_segments.items():
             curvature_markers[key + '_mean_' + wall] = np.mean(value)
-            curvature_markers[key + '_min_' + wall] = np.min(value)
-            curvature_markers[key + '_max_' + wall] = np.max(value)
+            # curvature_markers[key + '_min_' + wall] = np.min(value)
+            # curvature_markers[key + '_max_' + wall] = np.max(value)
 
         return curvature_markers
     # ---END-CurvatureMeasurements--------------------------------------------------------------------------------------
