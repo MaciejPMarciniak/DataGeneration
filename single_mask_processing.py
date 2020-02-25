@@ -131,8 +131,9 @@ class Mask2Contour:
 
         return _sorted_points
 
-    def sort_w_neighbours(self, show=False, point_id=0):
+    def sort_w_neighbours(self, show=False):
         clf = NearestNeighbors(2, n_jobs=-1).fit(self.edge_points)
+        point_id = int(np.where(self.edge_points[:, 1] == np.min(self.edge_points[:, 1]))[0][0])
         G = clf.kneighbors_graph()
         point_set = nx.from_scipy_sparse_matrix(G)
         opt_order = list(nx.dfs_preorder_nodes(point_set, point_id))
@@ -293,4 +294,4 @@ if __name__ == '__main__':
     for mask_image in mask_images:
         _mask = imageio.imread(os.path.join(mask_path, mask_image))
         m2c = Mask2Contour(_mask)
-        cont_marker = m2c.get_contour_and_curvature(show=False)  #
+        cont_marker = m2c.get_contour_and_curvature(show=True)  #
