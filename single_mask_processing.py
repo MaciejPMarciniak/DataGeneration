@@ -249,8 +249,8 @@ class Mask2Contour:
 
     def get_contour_and_curvature(self, show=False):
         contour_markers = dict()
-        m2c.get_contour()
-        markers = m2c.sort_contour(method='neighbors', show=show)
+        self.get_contour()
+        markers = self.sort_contour(method='neighbors', show=show)
         border = Contour(segmentations_path=None)
         border.endo_sorted_edge, _ = border._fit_border_through_pixels(self.sorted_edge_points)
         border.curvature = border._calculate_curvature()
@@ -285,6 +285,7 @@ class Mask2Contour:
         plt.show()
     # ---END-Plotting---------------------------------------------------------------------------------------------------
 
+
 if __name__ == '__main__':
 
     mask_path = r'G:\DataGeneration\Masks'
@@ -292,4 +293,4 @@ if __name__ == '__main__':
     for mask_image in mask_images:
         _mask = imageio.imread(os.path.join(mask_path, mask_image))
         m2c = Mask2Contour(_mask)
-        cont_marker = m2c.get_contour_and_curvature(show=True)  #
+        cont_marker = m2c.get_contour_and_curvature(show=False)  #
