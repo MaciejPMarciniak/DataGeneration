@@ -8,6 +8,7 @@ from itertools import combinations, product
 from sklearn.neighbors import NearestNeighbors
 import networkx as nx
 from LV_mask_analysis import Contour
+from simple_closed_path import SimpleClosedPath
 
 
 class Mask2Contour:
@@ -80,13 +81,9 @@ class Mask2Contour:
     # ---END-BorderExtraction-------------------------------------------------------------------------------------------
 
     # -----SortingAlgorihtms--------------------------------------------------------------------------------------------
-    def crust_algorithm(self, point_id=None, show=False):
-        vor = Voronoi(self.edge_points)
-        list_edge_points = self.edge_points.tolist()
-        crust_set = np.unique(np.concatenate((self.edge_points, vor.vertices)), axis=0)
-        deltri = Delaunay(crust_set)
+    def crust_algorithm(self, show=False):
 
-        def simplices2edges(_deltri, _crust_set):
+        def _simplices2edges(_deltri, _crust_set):
             unique_edges = {'points': [], 'indices': []}
             for simplex in _deltri.simplices:
                 del_edges_i = combinations(simplex, 2)
@@ -99,7 +96,11 @@ class Mask2Contour:
             unique_edges['indices'] = np.unique(unique_edges['indices'], axis=0)
             return unique_edges
 
-        all_edges = simplices2edges(deltri, crust_set)
+        vor = Voronoi(self.edge_points)
+        list_edge_points = self.edge_points.tolist()
+        crust_set = np.unique(np.concatenate((self.edge_points, vor.vertices)), axis=0)
+        deltri = Delaunay(crust_set)
+        all_edges = _simplices2edges(deltri, crust_set)
         crust_edges = {'points': [], 'indices': []}
 
         for del_edge, edge_id in zip(all_edges['points'], all_edges['indices']):
@@ -110,9 +111,28 @@ class Mask2Contour:
         G = nx.Graph()
         G.add_nodes_from([tuple(point) for point in crust_set])
         G.add_edges_from(crust_edges['indices'])
-        opt_order = list(nx.dfs_preorder_nodes(G.nodes(), point_id))  # left to right. Better method to be found
-        opt_order = [node for node in opt_order if not isinstance(node, tuple)]
-        _sorted_points = np.array([crust_set[new_id] for new_id in opt_order])
+        point_id = int(np.min(np.array(crust_edges['indices'])[:, 0]))
+
+        try:
+            cd = list(nx.chain_decomposition(G, point_id))[0]
+        except IndexError:  # raised when there is no chain. The leaves of the graph must be connected.
+            leaves = np.array([v for v, d in list(G.degree) if d == 1])
+            leaf_dists = cdist(crust_set[leaves], crust_set[leaves])
+            closest_leaves = []
+            for leaf in leaf_dists:
+                closest_leaves.append(min(enumerate(leaf), key=lambda x: x[1] if x[1] > 0 else float('inf'))[0])
+            leaf_edges = [[leaf1, leaf2] for leaf1, leaf2 in zip(leaves, leaves[closest_leaves])]
+            leaf_edges = sorted(leaf_edges, key=lambda x: x[0])
+            unique_edges = np.unique(leaf_edges).reshape((-1, 2))
+            unique_edges = [tuple(edge) for edge in unique_edges]
+            G.add_edges_from(list(unique_edges))
+            cd = list(nx.chain_decomposition(G, point_id))[0]
+
+        graph_path = [x[0] for x in list(cd)]
+        G.remove_edges_from(crust_edges['indices'])
+        nx.add_path(G, graph_path)
+
+        _sorted_points = np.array(crust_set[graph_path])
 
         if show:
             plt.subplot(121)
@@ -125,7 +145,7 @@ class Mask2Contour:
             plt.title('Crust algorithm result')
             plt.plot(_sorted_points[:, 0], _sorted_points[:, 1], 'b')
             plt.plot(self.edge_points[:, 0], self.edge_points[:, 1], 'r.')
-            plt.scatter(_sorted_points[0][0], _sorted_points[0][1], c='g', marker='d')
+            plt.scatter(_sorted_points[0][0], _sorted_points[0][1], c='g', marker='d', s=80)
             plt.scatter(_sorted_points[-1][0], _sorted_points[-1][1], c='k', marker='d')
             plt.show()
 
@@ -134,9 +154,11 @@ class Mask2Contour:
     def sort_w_neighbours(self, show=False):
         clf = NearestNeighbors(2, n_jobs=-1).fit(self.edge_points)
         point_id = int(np.where(self.edge_points[:, 1] == np.min(self.edge_points[:, 1]))[0][0])
-        G = clf.kneighbors_graph()
-        point_set = nx.from_scipy_sparse_matrix(G)
-        opt_order = list(nx.dfs_preorder_nodes(point_set, point_id))
+        adjacency_matrix = clf.kneighbors_graph()
+        G = nx.from_scipy_sparse_matrix(adjacency_matrix)
+
+        opt_order = list(nx.dfs_preorder_nodes(G, point_id))
+
         _sorted_points = np.array([self.edge_points[new_id] for new_id in opt_order])
 
         if show:
@@ -211,14 +233,14 @@ class Mask2Contour:
             plt.show()
         return self.edge_points
 
-    def sort_contour(self, method='neighbors', show=False):
+    def sort_contour(self, method='crust', show=False):
         if method == 'neighbors':
             self.sorted_edge_points = self.sort_w_neighbours(show=show)
         elif method == 'crust':
             self.sorted_edge_points = self.crust_algorithm(show=show)
         else:
             self.sorted_edge_points = None
-            exit('Only "neighbor" and "crust" methods available')
+            exit('Only "neighbors" and "crust" methods available')
 
         markers = self._get_corner_points(show=show)
 
@@ -251,7 +273,7 @@ class Mask2Contour:
     def get_contour_and_curvature(self, show=False):
         contour_markers = dict()
         self.get_contour()
-        markers = self.sort_contour(method='neighbors', show=show)
+        markers = self.sort_contour(method='crust', show=show)
         border = Contour(segmentations_path=None)
         border.endo_sorted_edge, _ = border._fit_border_through_pixels(self.sorted_edge_points)
         border.curvature = border._calculate_curvature()
