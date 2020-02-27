@@ -19,8 +19,10 @@ class Mask2Contour:
     Function to execute:
         - Mask2Contour.get_contour_and_curvature(self, show=False)
     Returns:
-        - a dictionary with two keys:
+        - a dictionary with 4 keys:
             - contour = (500 points, smoothed, ordered from left upper point ['basal septal point'])
+            - convexity - convexity metric value calculated as Area(mask) / Area(ConvexHull(mask))
+            - simplicity - simplicity metric value calculated as (Sqrt(4 * PI * Area(mask)) / Perimeter(mask)
             - curvature_markers = dictionary with 6 keys, each containing the average value of the segment:
              'basal_curvature_1_mean_endo'
              'mid_curvature_1_mean_endo'
