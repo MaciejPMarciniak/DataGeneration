@@ -2,13 +2,11 @@ import os
 import numpy as np
 import imageio
 import matplotlib.pyplot as plt
-from scipy.spatial import Voronoi, Delaunay
 from scipy.spatial.distance import cdist
 from itertools import combinations, product
-from sklearn.neighbors import NearestNeighbors
-import networkx as nx
 from LV_mask_analysis import Contour
-from simple_closed_path import SimpleClosedPath
+from skimage import morphology, measure
+from skimage import img_as_float
 
 
 class Mask2Contour:
@@ -31,12 +29,12 @@ class Mask2Contour:
              'mid_curvature_2_mean_endo'
              'basal_curvature_2_mean_endo'
     """
-    def __init__(self, mask=np.zeros((256, 256)), mask_value=255):
+    def __init__(self, mask=np.zeros((256, 256)), mask_value=1):
         self.mask = mask
         self.mask_value = mask_value
-        self.edge_points = None
+        self.mask[self.mask > 0] = mask_value
         self.sorted_edge_points = None
-        self.edge = None
+        self.sorted_endo_contour = None
 
     @staticmethod
     def _pair_coordinates(edge):
@@ -54,259 +52,119 @@ class Mask2Contour:
         perimeter = np.sum([np.linalg.norm(a - b) for a, b in zip(triplet, triplet_shift)])
         return perimeter
 
-    # -----BorderExtraction---------------------------------------------------------------------------------------------
-    def _correct_indices(self):
-        # To make sure that endocardium and not the cavity is captured, relevant indices are moved by 1
-        row_diffs = np.diff(self.mask, axis=1)
-        row_diffs_right = list(np.where(row_diffs == self.mask_value))
-        row_diffs_left = list(np.where(row_diffs == 256 - self.mask_value))
-        col_diffs = np.diff(self.mask, axis=0)
-        col_diffs_down = list(np.where(col_diffs == self.mask_value))
-        col_diffs_up = list(np.where(col_diffs == 256 - self.mask_value))
-
-        # index correction
-        row_diffs_left = [row_diffs_left[0], row_diffs_left[1] + 0.5]
-        col_diffs_up = [col_diffs_up[0] + 0.5, col_diffs_up[1]]
-        row_diffs_right = [row_diffs_right[0], row_diffs_right[1] + 0.5]
-        col_diffs_down = [col_diffs_down[0] + 0.5, col_diffs_down[1]]
-
-        # putting points together
-        edge = list()
-        edge_y = np.concatenate((row_diffs_right[0], row_diffs_left[0], col_diffs_down[0], col_diffs_up[0]))
-        edge_x = np.concatenate((row_diffs_right[1], row_diffs_left[1], col_diffs_down[1], col_diffs_up[1]))
-        edge.append(edge_x)
-        edge.append(edge_y)
-
-        return self._pair_coordinates(edge)
-    # ---END-BorderExtraction-------------------------------------------------------------------------------------------
-
-    # -----SortingAlgorihtms--------------------------------------------------------------------------------------------
-    def crust_algorithm(self, show=False):
-
-        def _simplices2edges(_deltri, _crust_set):
-            unique_edges = {'points': [], 'indices': []}
-            for simplex in _deltri.simplices:
-                del_edges_i = combinations(simplex, 2)
-                for _del_edge_i in del_edges_i:
-                    _del_edge_i = np.sort(_del_edge_i)
-                    _del_edge = _crust_set[_del_edge_i, :]
-                    unique_edges['points'].append(_del_edge)
-                    unique_edges['indices'].append(_del_edge_i)
-            unique_edges['points'] = np.unique(unique_edges['points'], axis=0)
-            unique_edges['indices'] = np.unique(unique_edges['indices'], axis=0)
-            return unique_edges
-
-        vor = Voronoi(self.edge_points)
-        list_edge_points = self.edge_points.tolist()
-        crust_set = np.unique(np.concatenate((self.edge_points, vor.vertices)), axis=0)
-        deltri = Delaunay(crust_set)
-        all_edges = _simplices2edges(deltri, crust_set)
-        crust_edges = {'points': [], 'indices': []}
-
-        for del_edge, edge_id in zip(all_edges['points'], all_edges['indices']):
-            if del_edge[0].tolist() in list_edge_points and del_edge[1].tolist() in list_edge_points:
-                crust_edges['points'].append(del_edge)
-                crust_edges['indices'].append(tuple(edge_id))
-
-        G = nx.Graph()
-        G.add_nodes_from([tuple(point) for point in crust_set])
-        G.add_edges_from(crust_edges['indices'])
-        point_id = int(np.min(np.array(crust_edges['indices'])[:, 0]))
-
-        try:
-            cd = list(nx.chain_decomposition(G, point_id))[0]
-        except IndexError:  # raised when there is no chain. The leaves of the graph must be connected.
-            leaves = np.array([v for v, d in list(G.degree) if d == 1])
-            leaf_dists = cdist(crust_set[leaves], crust_set[leaves])
-            closest_leaves = []
-            for leaf in leaf_dists:
-                closest_leaves.append(min(enumerate(leaf), key=lambda x: x[1] if x[1] > 0 else float('inf'))[0])
-            leaf_edges = [[leaf1, leaf2] for leaf1, leaf2 in zip(leaves, leaves[closest_leaves])]
-            leaf_edges = sorted(leaf_edges, key=lambda x: x[0])
-            unique_edges = np.unique(leaf_edges).reshape((-1, 2))
-            unique_edges = [tuple(edge) for edge in unique_edges]
-            G.add_edges_from(list(unique_edges))
-            cd = list(nx.chain_decomposition(G, point_id))[0]
-
-        graph_path = [x[0] for x in list(cd)]
-        G.remove_edges_from(crust_edges['indices'])
-        nx.add_path(G, graph_path)
-
-        _sorted_points = np.array(crust_set[graph_path])
-
-        if show:
-            plt.subplot(121)
-            plt.plot(self.edge_points[:, 0], self.edge_points[:, 1], 'r.')
-            for crust_edge in crust_edges['points']:
-                plt.plot(crust_edge[:, 0], crust_edge[:, 1], 'b')
-            plt.title('Found edges')
-
-            plt.subplot(122)
-            plt.title('Crust algorithm result')
-            plt.plot(_sorted_points[:, 0], _sorted_points[:, 1], 'b')
-            plt.plot(self.edge_points[:, 0], self.edge_points[:, 1], 'r.')
-            plt.scatter(_sorted_points[0][0], _sorted_points[0][1], c='g', marker='d', s=80)
-            plt.scatter(_sorted_points[-1][0], _sorted_points[-1][1], c='k', marker='d')
-            plt.show()
-
-        return _sorted_points
-
-    def sort_w_neighbours(self, show=False):
-        clf = NearestNeighbors(2, n_jobs=-1).fit(self.edge_points)
-        point_id = int(np.where(self.edge_points[:, 1] == np.min(self.edge_points[:, 1]))[0][0])
-        adjacency_matrix = clf.kneighbors_graph()
-        G = nx.from_scipy_sparse_matrix(adjacency_matrix)
-
-        opt_order = list(nx.dfs_preorder_nodes(G, point_id))
-
-        _sorted_points = np.array([self.edge_points[new_id] for new_id in opt_order])
-
-        if show:
-            plt.title('Sorted with nearest neighbors')
-            plt.plot(_sorted_points[:, 0], _sorted_points[:, 1], 'b')
-            plt.plot(self.edge_points[:, 0], self.edge_points[:, 1], 'r.')
-            plt.scatter(_sorted_points[0][0], _sorted_points[0][1], c='g', marker='d')
-            plt.scatter(_sorted_points[-1][0], _sorted_points[-1][1], c='k', marker='d')
-            plt.show()
-
-        return _sorted_points
-
-    # ---END-SortingAlgorithms------------------------------------------------------------------------------------------
-
     # -----EndocardialBorderSearch--------------------------------------------------------------------------------------
-    def _update_marker_ids(self, _markers):
-        _markers['id_left_basal'] = int(np.where((self.sorted_edge_points == _markers['left_basal']).all(axis=1))[0])
-        _markers['id_right_basal'] = int(np.where((self.sorted_edge_points == _markers['right_basal']).all(axis=1))[0])
-        _markers['id_apex'] = int(np.where((self.sorted_edge_points == _markers['apex']).all(axis=1))[0])
-        return _markers
+    def get_contour(self, show=False):
+        _contour = measure.find_contours(self.mask, level=np.max(self.mask)/2)[0]
+        self.sorted_edge_points = np.roll(_contour, 1, axis=1)
+        self.sorted_edge_points = self.sorted_edge_points[:-1]
+        if show:
+            plt.imshow(self.mask, cmap='gray')
+            plt.plot(self.sorted_edge_points[:, 0], self.sorted_edge_points[:, 1], 'r.', label='edge points')
+            plt.plot(self.sorted_edge_points[:, 0], self.sorted_edge_points[:, 1], c='orange', label='contour')
+            plt.legend()
+            plt.show()
+        return self.sorted_edge_points
 
-    def _get_corner_points(self, show=False):
+    def get_endo_contour(self, show=False):
+
+        def divide_pareto_points(pareto_points):
+            centroid = np.mean(self.sorted_edge_points, axis=0)
+            _basals = [p for p in pareto_points if p[1] > centroid[1]]
+            _apicals = [p for p in pareto_points if p[1] < centroid[1]]
+            return _basals, _apicals
+
+        def find_optimal_base(_basals, _apicals):
+            combs = combinations(_basals, r=2)
+            prods = product(combs, _apicals)
+            perimeters, areas, bases = [], [], []
+            for tri in prods:
+                base = [tri[0][0], tri[0][1]]
+                bases.append(np.array(base))
+                tri = np.array([tri[0][0], tri[0][1], tri[1]])
+                perimeters.append(self._tri_len(np.array(tri)))
+                areas.append(self._get_contour_area(np.array(tri)))
+
+            score = np.array(perimeters) * np.array(areas)
+            return np.array(bases[int(np.argmax(score))])
+
+        self.get_contour(show)
         distances = cdist(self.sorted_edge_points, self.sorted_edge_points)
         corner_points = np.argmax(distances, axis=0)
         unique, counts = np.unique(corner_points, return_counts=True)
         pareto_points = self.sorted_edge_points[unique]
 
-        centroid = np.mean(self.sorted_edge_points, axis=0)
-        basal_points = []
-        apicals = []
+        basals, apicals = divide_pareto_points(pareto_points)
+        optimal_base = find_optimal_base(basals, apicals)
 
-        for u in unique:
-            if self.sorted_edge_points[u, 1] > centroid[1]:
-                basal_points.append(self.sorted_edge_points[u])
-            else:
-                apicals.append(self.sorted_edge_points[u])
-
-        combs = combinations(basal_points, r=2)
-        prods = product(combs, apicals)
-        perimeters, areas, tris = [], [], []
-        for tri in prods:
-            tri = np.array([tri[0][0], tri[0][1], tri[1]])
-            tris.append(np.array(tri))
-            perimeters.append(self._tri_len(np.array(tri)))
-            areas.append(self._get_contour_area(np.array(tri)))
-
-        score = np.array(perimeters) * np.array(areas)
-        optimal_triangle = np.array(tris[int(np.argmax(score))])
-        _markers = dict()
-        basal_points = sorted(optimal_triangle, key=lambda x: (x[1]), reverse=True)[:2]
-        _markers['left_basal'], _markers['right_basal'] = sorted(basal_points, key=lambda x: (x[0]))
-        _markers['apex'] = sorted(optimal_triangle, key=lambda x: (x[1]), reverse=False)[0]
-        _markers = self._update_marker_ids(_markers)
+        left_basal, right_basal = sorted(optimal_base, key=lambda x: (x[0]))
+        left_basal_id = np.where((self.sorted_edge_points == left_basal).all(axis=1))[0]
+        self.sorted_endo_contour = np.roll(self.sorted_edge_points, -left_basal_id, axis=0)
+        right_basal_id = np.where((self.sorted_endo_contour == right_basal).all(axis=1))[0]
+        self.sorted_endo_contour = self.sorted_endo_contour[:int(right_basal_id)]
 
         if show:
-            plt.title('Pareto points')
-            plt.plot(self.sorted_edge_points[:, 0], self.sorted_edge_points[:, 1], 'r-')
+            plt.plot(self.sorted_endo_contour[:, 0], self.sorted_endo_contour[:, 1], 'r-')
             plt.plot(pareto_points[:, 0], pareto_points[:, 1], 'bo')
             plt.show()
 
-        return _markers
-
+        return self.sorted_endo_contour
     # ---END-EndocardialBorderSearch------------------------------------------------------------------------------------
 
     # -----ExecMethods--------------------------------------------------------------------------------------------------
-    def get_contour(self, show=False):
-        self.edge_points = self._correct_indices()
+    def get_simplicity(self):
+        mask_area = np.sum(self.mask)
+        mask_perimeter = measure.perimeter(self.mask)
+        return (np.sqrt(np.pi*4*mask_area))/mask_perimeter
+
+    def get_convexity(self, show=False):
+        convex_hull = morphology.convex_hull_image(self.mask)
+        mask_area = np.sum(self.mask)
+        convex_hull_area = np.sum(convex_hull)
+
+        if show:
+            plt.subplot(221)
+            plt.imshow(self.mask, cmap='gray')
+            plt.title('Original mask')
+            plt.subplot(222)
+            plt.imshow(convex_hull, cmap='gray')
+            plt.title('Convex hull')
+            plt.subplot(223)
+            chull_diff = img_as_float(convex_hull.copy())
+            chull_diff[self.mask > 0] = 2 * self.mask_value
+            plt.imshow(chull_diff, cmap='hot')
+            plt.title('Comparison')
+            plt.subplot(224)
+            plt.imshow(convex_hull - self.mask, cmap='gray')
+            plt.title('Difference')
+            plt.tight_layout()
+            plt.show()
+        return mask_area/convex_hull_area
+
+    def get_curvature(self, show=False):
+        if self.sorted_endo_contour is None:
+            self.get_endo_contour(show)
+        border = Contour(segmentations_path=None)
+        border.endo_sorted_edge, _ = border.fit_border_through_pixels(self.sorted_endo_contour)
+        border.curvature = border.calculate_curvature()
+        curvature_markers = border.get_curvature_markers()
+
         if show:
             plt.imshow(self.mask, cmap='gray')
-            plt.plot(self.edge_points[:, 0], self.edge_points[:, 1], 'r.')
-            plt.title('Edge points')
+            plt.plot(np.array(border.endo_sorted_edge)[:, 0], np.array(border.endo_sorted_edge)[:, 1], c='orange',
+                     label='Smooth endo contour', linewidth=3)
+            plt.plot(self.sorted_edge_points[:, 0], self.sorted_edge_points[:, 1], 'r.', label='Border points')
+            plt.title('Smoothing results')
+            plt.legend()
             plt.show()
-        return self.edge_points
+        return curvature_markers
 
-    def sort_contour(self, method='crust', show=False):
-        if method == 'neighbors':
-            self.sorted_edge_points = self.sort_w_neighbours(show=show)
-        elif method == 'crust':
-            self.sorted_edge_points = self.crust_algorithm(show=show)
-        else:
-            self.sorted_edge_points = None
-            exit('Only "neighbors" and "crust" methods available')
-
-        markers = self._get_corner_points(show=show)
-
-        # assert the points are ordered clockwise
-        if markers['id_left_basal'] < markers['id_apex'] < markers['id_right_basal'] or \
-                markers['id_right_basal'] < markers['id_left_basal'] < markers['id_apex'] or \
-                markers['id_apex'] < markers['id_right_basal'] < markers['id_left_basal']:
-            self.sorted_edge_points = self.sorted_edge_points[::-1, :]
-            markers = self._update_marker_ids(markers)
-
-        # roll so that the left basal is on the last position
-        self.sorted_edge_points = np.roll(self.sorted_edge_points, -(markers['id_left_basal'] + 1), axis=0)
-        markers = self._update_marker_ids(markers)
-
-        # reverse
-        if markers['id_left_basal'] == len(self.sorted_edge_points) - 1:
-            self.sorted_edge_points = self.sorted_edge_points[::-1, :]
-            markers = self._update_marker_ids(markers)
-
-        # check order. If it's fucked, then whole contour is fucked
-        assert markers['id_left_basal'] < markers['id_apex'] < markers['id_right_basal'], 'Wrong contour order!'
-
-        self.sorted_edge_points = self.sorted_edge_points[:markers['id_right_basal']+1]  # remove mitral part of base
-
-        if show:
-            self.plot_contour_with_markers(markers)
-
-        return markers
-
-    def get_contour_and_curvature(self, show=False):
-        contour_markers = dict()
-        self.get_contour()
-        markers = self.sort_contour(method='crust', show=show)
-        border = Contour(segmentations_path=None)
-        border.endo_sorted_edge, _ = border._fit_border_through_pixels(self.sorted_edge_points)
-        border.curvature = border._calculate_curvature()
-        contour_markers['contour'] = np.array(border.endo_sorted_edge)
-        contour_markers['curvature_markers'] = border._get_curvature_markers()
-        if show:
-            self.plot_contour_with_smoothing(markers, contour_markers['contour'])
+    def get_contour_and_markers(self, show=False):
+        contour_markers = {'contour': self.get_endo_contour(show),
+                           'curvature': self.get_curvature(show),
+                           'simplicity': self.get_simplicity(),
+                           'convexity': self.get_convexity(show)}
         return contour_markers
     # ---END-ExecMethods------------------------------------------------------------------------------------------------
-
-    # -----Plotting-----------------------------------------------------------------------------------------------------
-    def plot_contour_with_markers(self, _markers):
-        plt.imshow(self.mask, cmap='gray')
-        plt.plot(self.edge_points[:, 0], self.edge_points[:, 1], 'b.', label='edge', markersize=1)
-        plt.plot(self.sorted_edge_points[:, 0], self.sorted_edge_points[:, 1], 'r-', label='contour')
-        plt.scatter(_markers['left_basal'][0], _markers['left_basal'][1], marker='d', c='g', label='left_basal')
-        plt.scatter(_markers['right_basal'][0], _markers['right_basal'][1], marker='d', c='magenta', label='right_basal')
-        plt.scatter(_markers['apex'][0], _markers['apex'][1], marker='d', c='orange', label='apex')
-        plt.legend()
-        plt.show()
-        plt.close()
-
-    def plot_contour_with_smoothing(self, _markers, _smoothed_border):
-        plt.plot(_smoothed_border[:, 0], _smoothed_border[:, 1], c='orange')
-        plt.imshow(self.mask, cmap='gray')
-        plt.plot(self.sorted_edge_points[:, 0], self.sorted_edge_points[:, 1], 'r.', label='contour')
-        plt.scatter(_markers['left_basal'][0], _markers['left_basal'][1], marker='d', c='g', label='left_basal')
-        plt.scatter(_markers['right_basal'][0], _markers['right_basal'][1], marker='d', c='magenta',
-                    label='right_basal')
-        plt.scatter(_markers['apex'][0], _markers['apex'][1], marker='d', c='orange', label='apex')
-        plt.legend()
-        plt.show()
-    # ---END-Plotting---------------------------------------------------------------------------------------------------
 
 
 if __name__ == '__main__':
@@ -314,6 +172,10 @@ if __name__ == '__main__':
     mask_path = r'G:\DataGeneration\Masks'
     mask_images = os.listdir(mask_path)
     for mask_image in mask_images:
+        print(mask_image)
         _mask = imageio.imread(os.path.join(mask_path, mask_image))
         m2c = Mask2Contour(_mask)
-        cont_marker = m2c.get_contour_and_curvature(show=True)  #
+        c_m = m2c.get_contour_and_markers(True)
+        print(c_m['convexity'])
+        print(c_m['simplicity'])
+        print(c_m['curvature'])

@@ -16,7 +16,7 @@ from _io_data_generation import check_directory
 class Contour:
 
     def __init__(self, segmentations_path, output_path=None, image_info_file=None,  pixel_size=None, scale=False,
-                 smoothing_resulution=500, plot_smoothing_results=False):
+                 smoothing_resolution=500, plot_smoothing_results=False):
         """
         A class to calculate the curvature and wall thickness of the left ventricle based on the NTNU segmentation model
         :param segmentations_path: folder with segmentation images (with .png extension)
@@ -28,7 +28,7 @@ class Contour:
         :param pixel_size: (tuple) if scalling factors are the same for all images in the segmentations_path, provide a
         tuple with width and height of the pixels (in this order)
         :param scale: (bool) whether or not to scale the markers
-        :param smoothing_resulution: (int) the number of points in the smooth version of the endocardium. The epicardium
+        :param smoothing_resulotion: (int) the number of points in the smooth version of the endocardium. The epicardium
         will become 5 times as long, by default (for more accurate wall thickness measurement)
         :param plot_smoothing_results: (bool) whether or not to plot the results of smoothing
         """
@@ -63,7 +63,7 @@ class Contour:
         self.epi_sorted_edge = list()
         self.mask_values = {'LV_bp': 85, 'LV_myo': 170}  # in NTNU model, these were the default values
         self.is_endo = True
-        self.smoothing_resolution = smoothing_resulution
+        self.smoothing_resolution = smoothing_resolution
         self.distance_matrix = np.zeros(1)
         self.wall_thickness = None
         self.wall_thickness_markers = None
@@ -166,7 +166,7 @@ class Contour:
 
         return sorted_edge
 
-    def _fit_border_through_pixels(self, edge=None):
+    def fit_border_through_pixels(self, edge=None):
         """
         :param edge: if provided, given set of points is smoothed (implies that the points are sorted in some way).
         Otherwise one of the attributes is picked, based on the value of self.is_endo:
@@ -290,12 +290,12 @@ class Contour:
     # ---END-WallThicknessMeasurements----------------------------------------------------------------------------------
 
     # -----CurvatureMeasurements----------------------------------------------------------------------------------------
-    def _calculate_curvature(self):
+    def calculate_curvature(self):
         contour = self.endo_sorted_edge if self.is_endo else self.epi_sorted_edge
         curv = GradientCurvature(contour)
         return curv.calculate_curvature()
 
-    def _get_curvature_markers(self):
+    def get_curvature_markers(self):
         curvature_segments = {
             'basal_curvature_1': self.curvature[:int(self.smoothing_resolution / 6)],
             'mid_curvature_1': self.curvature[int(self.smoothing_resolution / 6):int(2*self.smoothing_resolution / 6)],
@@ -326,12 +326,12 @@ class Contour:
         self.endo_sorted_edge = self._lv_edge()
         if self.scale:
             self._scale_contours(seg_file)
-        self.endo_sorted_edge, orig = self._fit_border_through_pixels()
+        self.endo_sorted_edge, orig = self.fit_border_through_pixels()
         self.is_endo = False
         self.epi_sorted_edge = self._lv_edge()
         if self.scale:
             self._scale_contours(seg_file)
-        self.epi_sorted_edge, orig = self._fit_border_through_pixels()
+        self.epi_sorted_edge, orig = self.fit_border_through_pixels()
         if self.plot_smoothing_results:
             self.plot_mask_with_contour(self.endo_sorted_edge, self.epi_sorted_edge)
 
@@ -343,11 +343,11 @@ class Contour:
             self.plot_wt()
 
         self.is_endo = True
-        self.curvature = self._calculate_curvature()
-        self.endo_curvature_markers = self._get_curvature_markers()
+        self.curvature = self.calculate_curvature()
+        self.endo_curvature_markers = self.get_curvature_markers()
         self.is_endo = False
-        self.curvature = self._calculate_curvature()
-        self.epi_curvature_markers = self._get_curvature_markers()
+        self.curvature = self.calculate_curvature()
+        self.epi_curvature_markers = self.get_curvature_markers()
 
         all_markers = {'caseID': os.path.basename(seg_file)}
         for markers in (self.wall_thickness_markers, self.endo_curvature_markers, self.epi_curvature_markers):
@@ -442,9 +442,9 @@ if __name__ == '__main__':
     # parser.add_argument('-o', '--output_path', help='Directory where output will be stored', required=True)
     # args = parser.parse_args()
 
-    segmentations_path = 'C:\Code\curvature\model'
-    output_path = segmentations_path
+    segs_path = 'C:\Code\curvature\model'
+    out_path = segs_path
 
-    cont = Contour(segmentations_path, output_path, image_info_file='')
+    cont = Contour(segs_path, out_path, image_info_file='')
     cont.save_all_results(save_markers=True, save_contours=False, save_wt=False, save_curvature=False,
                           save_images=False)
