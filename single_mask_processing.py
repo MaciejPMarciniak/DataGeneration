@@ -11,13 +11,13 @@ from skimage import img_as_float
 
 class Mask2Contour:
     """
-    Class extracting the endocardial contour and its curvature indexes from a mask with LV bloodpool.
+    Class extracting the endocardial contour and its anatomical metrics from a mask with LV bloodpool. The metrics
+    include local curvature, convexity and simplicity.
     Assumptions:
-        - the value of mask is 255 and so is the maximum pixel value (as it is in a typical grayscale image). If it's
-        not the case, an additional method should be called beforehand, to enforce it.
+        - any value of the mask will be turned into 1 as the algorithm expects only 1 structure
         - the mask is positioned in the way that the base is directed upwards, with septum on the left side
     Function to execute:
-        - Mask2Contour.get_contour_and_curvature(self, show=False)
+        - Mask2Contour.get_contour_and_markers(self, show=False)
     Returns:
         - a dictionary with 4 keys:
             - contour = (500 points, smoothed, ordered from left upper point ['basal septal point'])
@@ -31,10 +31,12 @@ class Mask2Contour:
              'mid_curvature_2_mean_endo'
              'basal_curvature_2_mean_endo'
     """
-    def __init__(self, mask=np.zeros((256, 256)), mask_value=1):
+
+    mask_value = 1
+
+    def __init__(self, mask=np.zeros((256, 256))):
         self.mask = mask
-        self.mask_value = mask_value
-        self.mask[self.mask > 0] = mask_value
+        self.mask[self.mask > 0] = self.mask_value
         self.sorted_edge_points = None
         self.sorted_endo_contour = None
 
